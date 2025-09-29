@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Foodie Genie — Recipes</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <div class="brand">
+        <div class="logo">FG</div>
+        <div>
+          <h1>Recipes</h1>
+          <div class="lead">Results based on: {{ ingredients|join(', ') }}</div>
+        </div>
+      </div>
+      <a class="btn" href="{{ url_for('ingredients') }}">Change Ingredients</a>
+    </header>
+
+    {% if possible %}
+      <div class="section-title">✅ You can cook these</div>
+      {% for r in possible %}
+        <div class="recipe">
+          <div style="flex:1">
+            <h3>{{ r.name }}</h3>
+            <div class="meta">All ingredients available</div>
+            <ol>
+              {% for step in r.steps %}
+                <li>{{ step }}</li>
+              {% endfor %}
+            </ol>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+            <span class="badge ok">Ready</span>
+          </div>
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    {% if missing %}
+      <div class="section-title">⚠️ Missing some ingredients</div>
+      {% for r in missing %}
+        <div class="recipe">
+          <div style="flex:1">
+            <h3>{{ r.name }}</h3>
+            <div class="meta">Missing: {{ r.missing|join(', ') }}</div>
+            <ol>
+              {% for step in r.steps %}
+                <li>{{ step }}</li>
+              {% endfor %}
+            </ol>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+            <span class="badge miss">Missing</span>
+          </div>
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    {% if not possible and not missing %}
+      <p class="small">No recipes found with the current ingredients. Try different ingredients.</p>
+    {% endif %}
+
+    <div style="margin-top:12px">
+      <a class="btn secondary" href="{{ url_for('home') }}">← Back to Home</a>
+    </div>
+  </main>
+</body>
+</html>

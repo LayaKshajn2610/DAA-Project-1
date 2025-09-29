@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Foodie Genie</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <div class="brand">
+        <div class="logo">FG</div>
+        <div>
+          <h1>Foodie Genie</h1>
+          <div class="lead">Smart recipe suggestions from what you already have.</div>
+        </div>
+      </div>
+      <a class="btn" href="{{ url_for('ingredients') }}">Start →</a>
+    </header>
+
+    <section>
+      <p style="color:var(--muted);margin-top:6px">
+        Enter the ingredients you have on the next page and Foodie Genie will list recipes you can make and what’s missing.
+      </p>
+
+      <div style="margin-top:18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <a class="btn" href="{{ url_for('ingredients') }}">Enter Ingredients</a>
+        <a class="btn secondary" href="{{ url_for('recipes') }}">View Recipes (demo)</a>
+      </div>
+
+      <p class="small">Tip: use comma-separated ingredients like <code>rice, garlic, tomato</code>.</p>
+    </section>
+  </main>
+</body>
+</html>

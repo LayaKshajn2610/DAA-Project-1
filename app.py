@@ -1,70 +1,71 @@
-import os
-from flask import Flask, request, jsonify, render_template
 import sqlite3
-from recipe_matching import RecipeMatcher
+from flask import Flask, render_template, request, redirect, url_for
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+app = Flask(__name__)
+user_ingredients = []
 
-# make DB path absolute (safe regardless of how you run the app)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'data', 'recipes.db')
 
-# create matcher (will raise clear errors if DB missing/corrupt)
-matcher = RecipeMatcher(db_path=DB_PATH)
+def get_db_connection():
+    conn = sqlite3.connect("recipes.db")
+    conn.row_factory = sqlite3.Row
+    return conn
+
 
 @app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/api/suggest', methods=['POST'])
-def suggest():
-    data = request.get_json() or {}
-    user_ings = [i.strip().lower() for i in data.get('ingredients', [])]
-    max_results = int(data.get('max_results', 20))
-    allow_subst = bool(data.get('allow_subst', True))
-    results = matcher.suggest(user_ings, max_results=max_results, allow_subst=allow_subst)
-    return jsonify(results)
+def home():
+    return render_template("home.html")
 
 
-@app.route('/api/recipe/<int:recipe_id>', methods=['GET'])
-def recipe_details(recipe_id: int):
-    # Return recipe details including instructions and ingredients
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id, name, cuisine, servings, instructions FROM recipes WHERE id=?", (recipe_id,))
-    row = cur.fetchone()
-    if not row:
-        conn.close()
-        return jsonify({'error': 'Not found'}), 404
-    rid, name, cuisine, servings, instructions = row
-    cur.execute(
-        """
-        SELECT i.name, COALESCE(ri.qty, 0), COALESCE(ri.unit, ''), COALESCE(ri.optional, 0)
-        FROM recipe_ingredients ri
-        JOIN ingredients i ON i.id = ri.ingredient_id
-        WHERE ri.recipe_id = ?
-        ORDER BY i.name
-        """,
-        (recipe_id,)
-    )
-    ings = [
-        {
-            'name': n,
-            'qty': q,
-            'unit': u,
-            'optional': bool(opt)
-        } for (n, q, u, opt) in cur.fetchall()
-    ]
+@app.route('/ingredients', methods=['GET', 'POST'])
+def ingredients():
+    global user_ingredients
+    if request.method == 'POST':
+        raw = request.form.get("ingredients", "")
+        user_ingredients = [i.strip().lower() for i in raw.split(",") if i.strip()]
+        return redirect(url_for('recipes'))
+    return render_template("ingredients.html")
+
+
+@app.route('/recipes')
+def recipes():
+    if not user_ingredients:
+        return redirect(url_for('ingredients'))
+
+    conn = get_db_connection()
+
+    # Get all recipes with ingredients
+    rows = conn.execute("""
+        SELECT r.id, r.name, r.steps, GROUP_CONCAT(i.name) AS ingredients
+        FROM recipes r
+        JOIN ingredients i ON r.id = i.recipe_id
+        GROUP BY r.id
+    """).fetchall()
+
     conn.close()
-    return jsonify({
-        'id': rid,
-        'name': name,
-        'cuisine': cuisine,
-        'servings': servings,
-        'instructions': instructions,
-        'ingredients': ings
-    })
 
-if __name__ == '__main__':
-    # debug=True for development only
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    possible, missing = [], []
+
+    for row in rows:
+        rec_ing = row["ingredients"].split(",")
+        rec_ing = [ing.strip().lower() for ing in rec_ing]
+        missing_ing = [ing for ing in rec_ing if ing not in user_ingredients]
+
+        recipe = {
+            "name": row["name"],
+            "steps": row["steps"].split("|"),
+            "ingredients": rec_ing
+        }
+
+        if not missing_ing:
+            possible.append(recipe)
+        else:
+            missing.append({**recipe, "missing": missing_ing})
+
+    return render_template("recipes.html",
+                           possible=possible,
+                           missing=missing,
+                           ingredients=user_ingredients)
+
+
+if __name__ == "__main__":
+    app.run(debug=True)

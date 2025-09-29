@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en" class="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Recipe Suggester</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <svg width="36" height="36" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M12 2L3 7v7c0 5 4 8 9 8s9-3 9-8V7l-9-5z"/>
+        </svg>
+        <div>
+          <h1>Recipe Suggester</h1>
+          <p class="muted">Find recipes from what’s in your pantry — with substitutions & gap analysis</p>
+        </div>
+      </div>
+      <div class="controls">
+        <label class="switch">
+          <input id="allowSubst" type="checkbox" checked />
+          <span class="slider"></span>
+        </label>
+        <span class="muted small">Allow substitutions</span>
+        <span class="divider"></span>
+        <button id="themeToggle" class="btn small" title="Toggle theme">Theme</button>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="panel">
+        <form id="ingredients-form" class="input-area" onsubmit="return false;">
+          <div class="input-header">
+            <label for="ing-input">Your ingredients</label>
+            <div class="small muted">Type ingredient & press Enter or “,”</div>
+          </div>
+
+          <div id="chip-wrap" class="chip-wrap" tabindex="0">
+            <input id="ing-input" class="chip-input" placeholder="e.g. eggs, milk, flour" autofocus />
+            <button id="pasteBtn" type="button" class="btn ghost">Paste</button>
+            <button id="clearBtn" type="button" class="btn ghost">Clear</button>
+            <button id="submitBtn" type="button" class="btn primary">Suggest</button>
+          </div>
+
+          <div id="hint" class="hint muted">You can paste a comma-separated list or add items one-by-one.</div>
+        </form>
+      </section>
+
+      <section class="panel results-panel">
+        <div class="results-header">
+          <h2 id="resultsTitle">Suggestions</h2>
+          <div class="action-row">
+            <div id="spinner" class="spinner hidden" aria-hidden="true"></div>
+            <div id="summary" class="muted small">Enter ingredients and press Suggest</div>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <label class="small muted">Sort
+            <select id="sortSelect">
+              <option value="score">Best match</option>
+              <option value="missing">Fewest missing</option>
+              <option value="name">Name A–Z</option>
+            </select>
+          </label>
+          <label class="small muted">Max results
+            <input id="maxResults" type="number" min="1" max="50" value="12" />
+          </label>
+          <span class="flex-spacer"></span>
+          <button id="shareBtn" class="btn small outline">Share</button>
+          <button id="copyListBtn" class="btn small outline">Copy List</button>
+          <button id="downloadListBtn" class="btn small outline">Download</button>
+          <button id="printListBtn" class="btn small outline">Print</button>
+        </div>
+
+        <div id="results" class="results-grid" aria-live="polite"></div>
+
+        <aside id="shopping" class="shopping-panel hidden">
+          <h3>Shopping list (top results)</h3>
+          <ul id="shoppingList"></ul>
+        </aside>
+        <aside id="favorites" class="shopping-panel hidden">
+          <h3>Your favorites</h3>
+          <ul id="favList"></ul>
+        </aside>
+      </section>
+    </main>
+
+    <footer class="foot muted">
+      Tips: use the toggle to allow substitutions. Substitutions that match your pantry will be used automatically.
+    </footer>
+  </div>
+
+  <!-- Modal for recipe details -->
+  <div id="recipeModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <header class="modal-head">
+        <h3 id="modalTitle">Recipe</h3>
+        <button class="icon-btn" title="Close" data-close>
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div id="modalBody" class="modal-body"></div>
+      <footer class="modal-foot">
+        <button class="btn" data-close>Close</button>
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    // --- simple chip input & UI logic ---
+    const ingInput = document.getElementById('ing-input');
+    const chipWrap = document.getElementById('chip-wrap');
+    const submitBtn = document.getElementById('submitBtn');
+    const pasteBtn = document.getElementById('pasteBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const resultsEl = document.getElementById('results');
+    const spinner = document.getElementById('spinner');
+    const summary = document.getElementById('summary');
+    const allowSubst = document.getElementById('allowSubst');
+    const shoppingPanel = document.getElementById('shopping');
+    const shoppingList = document.getElementById('shoppingList');
+    const sortSelect = document.getElementById('sortSelect');
+    const maxResults = document.getElementById('maxResults');
+    const shareBtn = document.getElementById('shareBtn');
+    const copyListBtn = document.getElementById('copyListBtn');
+    const downloadListBtn = document.getElementById('downloadListBtn');
+    const printListBtn = document.getElementById('printListBtn');
+    const themeToggle = document.getElementById('themeToggle');
+    const favoritesPanel = document.getElementById('favorites');
+    const favList = document.getElementById('favList');
+
+    let ingredients = [];
+    let lastResults = [];
+    let favorites = loadJSON('favorites', []);
+
+    function renderChips(){
+      // remove existing chips (except input and buttons)
+      const existing = Array.from(chipWrap.querySelectorAll('.chip'));
+      existing.forEach(c => c.remove());
+      // insert chips before input
+      ingredients.forEach((ing, idx) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip';
+        chip.innerHTML = `<span>${ing}</span><svg class="x" viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+        chip.addEventListener('click', () => { ingredients.splice(idx,1); renderChips(); });
+        chipWrap.insertBefore(chip, ingInput);
+      });
+      ingInput.value = '';
+      ingInput.focus();
+      savePantry();
+    }
+
+    function addIngredient(raw){
+      const cleaned = raw.trim().toLowerCase();
+      if(!cleaned) return;
+      // split if multiple comma-separated
+      cleaned.split(',').map(s=>s.trim()).filter(Boolean).forEach(s=>{
+        if(!ingredients.includes(s)) ingredients.push(s);
+      });
+      renderChips();
+    }
+
+    ingInput.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter' || e.key === ','){
+        e.preventDefault();
+        addIngredient(ingInput.value);
+      } else if(e.key === 'Backspace' && ingInput.value === '' && ingredients.length){
+        // remove last
+        ingredients.pop();
+        renderChips();
+      }
+    });
+
+    pasteBtn.addEventListener('click', async ()=>{
+      try{
+        const text = await navigator.clipboard.readText();
+        addIngredient(text);
+      }catch(e){
+        // fallback prompt
+        const t = prompt('Paste ingredients (comma separated)');
+        if(t) addIngredient(t);
+      }
+    });
+
+    clearBtn.addEventListener('click', ()=>{
+      ingredients = [];
+      renderChips();
+      resultsEl.innerHTML = '';
+      shoppingPanel.classList.add('hidden');
+      summary.textContent = 'Cleared';
+    });
+
+    submitBtn.addEventListener('click', fetchSuggestions);
+    sortSelect.addEventListener('change', ()=> renderResults(lastResults));
+    maxResults.addEventListener('change', ()=> {/* keep current results */});
+    shareBtn.addEventListener('click', shareState);
+    copyListBtn.addEventListener('click', copyShoppingList);
+    downloadListBtn.addEventListener('click', downloadShoppingList);
+    printListBtn.addEventListener('click', ()=> window.print());
+    themeToggle.addEventListener('click', toggleTheme);
+
+    async function fetchSuggestions(){
+      if(ingredients.length === 0){
+        summary.textContent = 'Add at least one ingredient.';
+        return;
+      }
+      resultsEl.innerHTML = '';
+      spinner.classList.remove('hidden');
+      summary.textContent = 'Searching...';
+
+      const limit = parseInt(maxResults.value || '12', 10);
+      const body = { ingredients, max_results: limit, allow_subst: allowSubst.checked };
+      try {
+        const res = await fetch('/api/suggest', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(body)
+        });
+        if(!res.ok){ throw new Error('Server error '+res.status); }
+        const data = await res.json();
+        lastResults = Array.isArray(data) ? data : [];
+        renderResults(lastResults);
+        savePreset();
+      } catch(err){
+        summary.textContent = 'Error: ' + (err.message || err);
+      } finally {
+        spinner.classList.add('hidden');
+      }
+    }
+
+    function renderResults(list){
+      resultsEl.innerHTML = '';
+      shoppingList.innerHTML = '';
+      if(!list || list.length === 0){
+        summary.textContent = 'No matches found.';
+        return;
+      }
+      const sorted = sortResults(list.slice());
+      summary.textContent = `${sorted.length} suggestions`;
+      const aggregate = {};
+
+      sorted.forEach(item=>{
+        // card
+        const card = document.createElement('article');
+        card.className = 'card';
+        const scoreBar = Math.max(0, Math.min(100, Math.round(item.score * 100)));
+        const miss = item.missing_ingredients || [];
+        // accumulate shopping
+        miss.forEach(m => aggregate[m] = (aggregate[m]||0)+1);
+
+        let subsHTML = '';
+        if(item.substitution_plan && Object.keys(item.substitution_plan).length){
+          subsHTML = '<ul class="subs">';
+          for(const k in item.substitution_plan){
+            const v = item.substitution_plan[k];
+            subsHTML += `<li><strong>${k}</strong> → <em>${v.substitute}</em> <span class="pill">score ${v.score}</span></li>`;
+          }
+          subsHTML += '</ul>';
+        }
+
+        card.innerHTML = `
+          <header class="card-head">
+            <h3>${escapeHtml(item.name)}</h3>
+            <div class="score-wrap" title="Match score: ${item.score}"><div class="score" style="--w:${scoreBar}%;"></div></div>
+            <button class=\"icon-btn fav-btn\" title=\"Toggle favorite\" data-id=\"${item.recipe_id}\" data-name=\"${escapeHtml(item.name)}\">★</button>
+          </header>
+          <div class="card-body">
+            <p class="muted small">Missing: ${miss.length ? escapeHtml(miss.join(', ')) : '<strong>None</strong>'}</p>
+            ${subsHTML}
+          </div>
+          <footer class="card-foot">
+            <button class="btn small outline" onclick="showRecipe(${item.recipe_id})">View</button>
+            <button class="btn small" onclick="addToPantrySuggested(${JSON.stringify(item.missing_ingredients)})">Add missing to pantry</button>
+          </footer>
+        `;
+        resultsEl.appendChild(card);
+      });
+
+      // shopping list from aggregate (top 8)
+      const entries = Object.entries(aggregate).sort((a,b)=>b[1]-a[1]).slice(0,12);
+      if(entries.length){
+        shoppingPanel.classList.remove('hidden');
+        entries.forEach(([name,count])=>{
+          const li = document.createElement('li');
+          li.textContent = `${name} — recommended for ${count} recipe(s)`;
+          shoppingList.appendChild(li);
+        });
+      } else {
+        shoppingPanel.classList.add('hidden');
+      }
+
+      // wire favorites
+      resultsEl.querySelectorAll('.fav-btn').forEach(btn=>{
+        btn.addEventListener('click', ()=> toggleFavorite(parseInt(btn.dataset.id,10), btn.dataset.name));
+        const rid = parseInt(btn.dataset.id,10);
+        if(isFavorite(rid)) btn.classList.add('active');
+      });
+      renderFavorites();
+    }
+
+    // small helpers
+    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+    // Modal helpers
+    const modal = document.getElementById('recipeModal');
+    const modalBody = document.getElementById('modalBody');
+    const modalTitle = document.getElementById('modalTitle');
+    modal.addEventListener('click', (e)=>{ if(e.target.hasAttribute('data-close')) hideModal(); });
+    function showModal(){ modal.classList.remove('hidden'); }
+    function hideModal(){ modal.classList.add('hidden'); }
+
+    async function showRecipe(id){
+      try{
+        modalTitle.textContent = 'Loading...';
+        modalBody.innerHTML = '<div class="spinner"></div>';
+        showModal();
+        const res = await fetch(`/api/recipe/${id}`);
+        if(!res.ok) throw new Error('Failed to load recipe');
+        const r = await res.json();
+        modalTitle.textContent = r.name || 'Recipe';
+        let ingList = '';
+        if(Array.isArray(r.ingredients)){
+          ingList = '<ul class="ing-list">' + r.ingredients.map(i=>`<li>${escapeHtml(i.name)} ${i.qty?(' - '+i.qty):''} ${i.unit||''} ${i.optional?'<span class=\'pill\'>optional</span>':''}</li>`).join('') + '</ul>';
+        }
+        const instr = r.instructions ? `<pre class="instructions">${escapeHtml(r.instructions)}</pre>` : '<p class="muted">No instructions</p>';
+        modalBody.innerHTML = `
+          <div class="recipe-detail">
+            <div class="meta muted small">${r.cuisine || ''} • Serves ${r.servings || 1}</div>
+            <h4>Ingredients</h4>
+            ${ingList}
+            <h4>Instructions</h4>
+            ${instr}
+          </div>
+        `;
+      }catch(err){
+        modalTitle.textContent = 'Error';
+        modalBody.textContent = (err && err.message) || 'Unable to load recipe.';
+      }
+    }
+
+    function addToPantrySuggested(arr){
+      (arr || []).forEach(i => addIngredient(i));
+      renderChips();
+      summary.textContent = 'Missing items added to your pantry (chips).';
+    }
+
+    // init focus
+    chipWrap.addEventListener('click', ()=> ingInput.focus());
+
+    // sorting
+    function sortResults(list){
+      const mode = sortSelect.value;
+      if(mode === 'name') return list.sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+      if(mode === 'missing') return list.sort((a,b)=> (a.missing_ingredients?.length||0) - (b.missing_ingredients?.length||0));
+      return list.sort((a,b)=> (b.score||0) - (a.score||0));
+    }
+
+    // storage
+    function saveJSON(key, value){ try{ localStorage.setItem(key, JSON.stringify(value)); }catch{} }
+    function loadJSON(key, fallback){ try{ const v = localStorage.getItem(key); return v? JSON.parse(v): fallback; }catch{ return fallback; } }
+    function savePantry(){ saveJSON('pantry', ingredients); }
+    function loadPantry(){ const p = loadJSON('pantry', []); if(Array.isArray(p)) { ingredients = p; renderChips(); } }
+    function savePreset(){ const preset = { ingredients, allow: allowSubst.checked, t: Date.now() }; saveJSON('lastPreset', preset); }
+
+    // favorites
+    function isFavorite(id){ return favorites.some(f=>f.id===id); }
+    function toggleFavorite(id, name){
+      if(isFavorite(id)) favorites = favorites.filter(f=>f.id!==id);
+      else favorites.push({id, name});
+      saveJSON('favorites', favorites);
+      renderFavorites();
+      document.querySelectorAll(`.fav-btn[data-id='${id}']`).forEach(b=> b.classList.toggle('active'));
+    }
+    function renderFavorites(){
+      favList.innerHTML = '';
+      if(!favorites.length){ favoritesPanel.classList.add('hidden'); return; }
+      favoritesPanel.classList.remove('hidden');
+      favorites.forEach(f=>{
+        const li = document.createElement('li');
+        li.innerHTML = `${escapeHtml(f.name)} <button class="btn small ghost" onclick="showRecipe(${f.id})">Open</button> <button class="btn small ghost" onclick="removeFavorite(${f.id})">Remove</button>`;
+        favList.appendChild(li);
+      });
+    }
+    function removeFavorite(id){ favorites = favorites.filter(f=>f.id!==id); saveJSON('favorites', favorites); renderFavorites(); }
+
+    // share
+    async function shareState(){
+      const url = new URL(window.location.href);
+      url.searchParams.set('ings', ingredients.join(','));
+      url.searchParams.set('subs', String(allowSubst.checked));
+      url.searchParams.set('sort', sortSelect.value);
+      try{ await navigator.clipboard.writeText(url.toString()); summary.textContent = 'Shareable link copied.'; }
+      catch(e){ prompt('Copy link:', url.toString()); }
+    }
+
+    // shopping list actions
+    async function copyShoppingList(){
+      const txt = Array.from(shoppingList.querySelectorAll('li')).map(li=>li.textContent).join('\n');
+      try{ await navigator.clipboard.writeText(txt); summary.textContent = 'Shopping list copied.'; }catch{}
+    }
+    function downloadShoppingList(){
+      const txt = Array.from(shoppingList.querySelectorAll('li')).map(li=>li.textContent).join('\n');
+      const blob = new Blob([txt], {type:'text/plain'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'shopping-list.txt';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    // theme
+    function toggleTheme(){
+      document.documentElement.classList.toggle('light');
+    }
+
+    // hydrate from URL and storage
+    function hydrateFromURL(){
+      const params = new URLSearchParams(location.search);
+      const ings = params.get('ings');
+      const subs = params.get('subs');
+      const sort = params.get('sort');
+      if(ings) { ingredients = ings.split(',').filter(Boolean); }
+      if(subs !== null) allowSubst.checked = (subs === 'true');
+      if(sort) sortSelect.value = sort;
+      renderChips();
+    }
+    loadPantry();
+    hydrateFromURL();
+  </script>
+</body>
+</html>
